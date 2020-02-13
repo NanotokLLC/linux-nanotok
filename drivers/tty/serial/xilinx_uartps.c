@@ -1280,9 +1280,12 @@ static int cdns_uart_console_setup(struct console *co, char *options)
 static int cdns_uart_suspend(struct device *device)
 {
 	struct uart_port *port = dev_get_drvdata(device);
+	struct cdns_uart *cdns_uart = port->private_data;
+	int may_wake;
 
+	may_wake = device_may_wakeup(device);
 
-
+	if (console_suspend_enabled && uart_console(port) && may_wake) {
 		unsigned long flags = 0;
 
 		spin_lock_irqsave(&port->lock, flags);
@@ -1297,7 +1300,11 @@ static int cdns_uart_suspend(struct device *device)
 		spin_unlock_irqrestore(&port->lock, flags);
 	}
 
-
+	/*
+	 * Call the API provided in serial_core.c file which handles
+	 * the suspend.
+	 */
+	return uart_suspend_port(cdns_uart->cdns_uart_driver, port);
 }
 
 /**
@@ -1312,7 +1319,7 @@ static int cdns_uart_resume(struct device *device)
 	struct cdns_uart *cdns_uart = port->private_data;
 	unsigned long flags = 0;
 	u32 ctrl_reg;
-
+	int may_wake;
 
 	may_wake = device_may_wakeup(device);
 

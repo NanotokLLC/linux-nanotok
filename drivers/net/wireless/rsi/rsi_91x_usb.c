@@ -16,6 +16,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/types.h>
 #include <net/rsi_91x.h>
 #include "rsi_usb.h"
 #include "rsi_hal.h"
@@ -29,7 +30,7 @@ MODULE_PARM_DESC(dev_oper_mode,
 		 "9[Wi-Fi STA + BT LE], 13[Wi-Fi STA + BT classic + BT LE]\n"
 		 "6[AP + BT classic], 14[AP + BT classic + BT LE]");
 
-static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num);
+static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num, gfp_t flags);
 
 /**
  * rsi_usb_card_write() - This function writes to the USB Card.
@@ -117,7 +118,7 @@ static int rsi_find_bulk_in_and_out_endpoints(struct usb_interface *interface,
 	__le16 buffer_size;
 	int ii, bin_found = 0, bout_found = 0;
 
-	iface_desc = &(interface->altsetting[0]);
+	iface_desc = interface->cur_altsetting;
 
 	for (ii = 0; ii < iface_desc->desc.bNumEndpoints; ++ii) {
 		endpoint = &(iface_desc->endpoint[ii].desc);
@@ -266,22 +267,24 @@ static void rsi_rx_done_handler(struct urb *urb)
 	if (urb->status)
 		goto out;
 
-	if (urb->actual_length <= 0) {
-		rsi_dbg(INFO_ZONE, "%s: Zero length packet\n", __func__);
+	if (urb->actual_length <= 0 ||
+	    urb->actual_length > rx_cb->rx_skb->len) {
+		rsi_dbg(INFO_ZONE, "%s: Invalid packet length = %d\n",
+			__func__, urb->actual_length);
 		goto out;
 	}
 	if (skb_queue_len(&dev->rx_q) >= RSI_MAX_RX_PKTS) {
 		rsi_dbg(INFO_ZONE, "Max RX packets reached\n");
 		goto out;
 	}
-	skb_put(rx_cb->rx_skb, urb->actual_length);
+	skb_trim(rx_cb->rx_skb, urb->actual_length);
 	skb_queue_tail(&dev->rx_q, rx_cb->rx_skb);
 
 	rsi_set_event(&dev->rx_thread.event);
 	status = 0;
 
 out:
-	if (rsi_rx_urb_submit(dev->priv, rx_cb->ep_num))
+	if (rsi_rx_urb_submit(dev->priv, rx_cb->ep_num, GFP_ATOMIC))
 		rsi_dbg(ERR_ZONE, "%s: Failed in urb submission", __func__);
 
 	if (status)
@@ -294,7 +297,7 @@ out:
  *
  * Return: 0 on success, a negative error code on failure.
  */
-static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num)
+static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num, gfp_t mem_flags)
 {
 	struct rsi_91x_usbdev *dev = (struct rsi_91x_usbdev *)adapter->rsi_dev;
 	struct rx_usb_ctrl_block *rx_cb = &dev->rx_cb[ep_num - 1];
@@ -308,6 +311,7 @@ static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num)
 	if (!skb)
 		return -ENOMEM;
 	skb_reserve(skb, MAX_DWORD_ALIGN_BYTES);
+	skb_put(skb, RSI_MAX_RX_USB_PKT_SIZE - MAX_DWORD_ALIGN_BYTES);
 	dword_align_bytes = (unsigned long)skb->data & 0x3f;
 	if (dword_align_bytes > 0)
 		skb_push(skb, dword_align_bytes);
@@ -319,13 +323,15 @@ static int rsi_rx_urb_submit(struct rsi_hw *adapter, u8 ep_num)
 			  usb_rcvbulkpipe(dev->usbdev,
 			  dev->bulkin_endpoint_addr[ep_num - 1]),
 			  urb->transfer_buffer,
-			  RSI_MAX_RX_USB_PKT_SIZE,
+			  skb->len,
 			  rsi_rx_done_handler,
 			  rx_cb);
 
-	status = usb_submit_urb(urb, GFP_KERNEL);
-	if (status)
+	status = usb_submit_urb(urb, mem_flags);
+	if (status) {
 		rsi_dbg(ERR_ZONE, "%s: Failed in urb submission\n", __func__);
+		dev_kfree_skb(skb);
+	}
 
 	return status;
 }
@@ -640,7 +646,6 @@ fail_rx:
 	kfree(rsi_dev->tx_buffer);
 
 fail_eps:
-	kfree(rsi_dev);
 
 	return status;
 }
@@ -779,12 +784,12 @@ static int rsi_probe(struct usb_interface *pfunction,
 		rsi_dbg(INIT_ZONE, "%s: Device Init Done\n", __func__);
 	}
 
-	status = rsi_rx_urb_submit(adapter, WLAN_EP);
+	status = rsi_rx_urb_submit(adapter, WLAN_EP, GFP_KERNEL);
 	if (status)
 		goto err1;
 
 	if (adapter->priv->coex_mode > 1) {
-		status = rsi_rx_urb_submit(adapter, BT_EP);
+		status = rsi_rx_urb_submit(adapter, BT_EP, GFP_KERNEL);
 		if (status)
 			goto err1;
 	}

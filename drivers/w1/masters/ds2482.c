@@ -25,7 +25,7 @@
 /*
 2020.01.31:NEB: Control device registration
 */
-#define REGISTER_OF	1
+#define REGISTER_OF						TRUE
 #define DS2482_DRIVER_NAME				"ds2482"
 
 /**

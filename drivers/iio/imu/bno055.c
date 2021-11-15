@@ -56,6 +56,7 @@
 
 #define BNO055_REG_OPR_MODE				0x3D
 #define BNO055_REG_PWR_MODE				0x3E	// 2016Nov07:NEB
+#define BNO055_REG_TEMP_SOURCE			0x40	// 2021Jun08:NEB
 #define BNO055_REG_AXIS_MAP				0x41	// 2016Nov07:NEB
 #define BNO055_REG_AXIS_SIGN			0x42
 
@@ -240,6 +241,7 @@ struct bno055_data
 	unsigned int unit_gyro;
 	unsigned int unit_accel;
 	unsigned int rot_convention;
+	unsigned int temp_reg;
 #	if defined USE_LOCK
 		struct mutex lock;
 #	endif // defined USE_LOCK
@@ -435,7 +437,8 @@ static int bno055_read_temp_chan(struct iio_dev *indio_dev, int *val)
 	{
 		return ret;
 	}
-	ret = regmap_read(data->regmap, BNO055_REG_TEMP, &raw_val);
+	//ret = regmap_read(data->regmap, BNO055_REG_TEMP, &raw_val);
+	ret = regmap_read(data->regmap, data->temp_reg, &raw_val);
 	if ( 0 == ret )
 	{
 		/*
@@ -605,6 +608,8 @@ static int bno055_init_chip( struct iio_dev *indio_dev )
 	 * Configure units to what we care about.  Also configure
 	 * rotation convention.  See datasheet Section 4.3.60.
 	 */
+	data->temp_reg = BNO055_REG_TEMP;
+
 	ret = regmap_write( data->regmap, BNO055_REG_UNIT_SEL, data->rot_convention | data->unit_temp | data->unit_euler | data->unit_gyro | data->unit_accel );
 	if ( ret < 0 )
 	{
